@@ -1,0 +1,44 @@
+Package: progme
+Type: Package
+Title: Extended Progression Models for Repeated Measures
+Version: 0.1.0
+Authors@R: c(
+    person("Mukul", "Bijalwan", email = "mukulbijalwan555@gmail.com",
+           role = c("aut", "cre"),
+           comment = c(ORCID = "0009-0001-3040-6912")),
+    person("Gunjan", "Aggrwal", role = "aut"),
+    person("Mukul", "Jain", role = "aut"))
+Description: Extended progression models for repeated measures in progressive
+    disease clinical trials. Provides nonlinear mixed-effects progression
+    models (linear, plateau, Emax, exponential decay), delayed treatment
+    onset estimation by profile likelihood, joint longitudinal-survival
+    models for informative dropout, competing-risks extensions,
+    biomarker-informed adaptive dosing rules, and simulation-based power
+    and sample-size calculation. The progression-model view of treatment
+    effects, in which effects are characterised on the underlying disease
+    trajectory rather than as additive shifts on the outcome scale, follows
+    Raket (2022) <doi:10.1002/sim.9581>. The nonlinear mixed-effects
+    machinery is built on the 'nlme' implementation described by Pinheiro
+    and Bates (2000, ISBN 978-0-387-98957-0), and the joint modelling of
+    longitudinal and time-to-event data follows Rizopoulos (2012,
+    ISBN 978-1-4398-7286-4).
+License: GPL (>= 3)
+Encoding: UTF-8
+LazyData: true
+Depends: R (>= 4.1.0)
+Imports: nlme, survival, ggplot2, stats, graphics, utils
+Suggests: rstan, testthat (>= 3.0.0), knitr, rmarkdown
+VignetteBuilder: knitr
+Config/testthat/edition: 3
+URL: https://github.com/MukulBijalwan/progme
+BugReports: https://github.com/MukulBijalwan/progme/issues
+Config/roxygen2/version: 8.1.0
+NeedsCompilation: no
+Packaged: 2026-10-13 13:47:08 UTC; Admin
+Author: Mukul Bijalwan [aut, cre] (ORCID:
+    <https://orcid.org/0009-0001-3040-6912>),
+  Gunjan Aggrwal [aut],
+  Mukul Jain [aut]
+Maintainer: Mukul Bijalwan <mukulbijalwan555@gmail.com>
+Repository: CRAN
+Date/Publication: 2026-10-22 10:30:09 UTC

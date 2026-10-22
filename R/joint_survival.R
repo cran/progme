@@ -1,0 +1,155 @@
+# Joint longitudinal-survival model for informative dropout
+#
+# Two-stage frequentist implementation:
+#   Stage 1: fit the longitudinal mixed model, extract empirical-Bayes
+#            estimates of the subject-specific intercepts and slopes.
+#   Stage 2: fit a Weibull (or exponential) parametric survival model with
+#            the EB current value / slope as time-fixed association terms.
+#
+# When rstanarm is installed, pmrm_joint() can instead call
+# rstanarm::stan_jm() for a fully Bayesian joint fit.
+
+#' Fit a joint longitudinal-survival model
+#'
+#' @param long_formula Longitudinal mixed-model formula, e.g.
+#'   \code{y ~ time * trt}.
+#' @param surv_formula Survival formula, e.g. \code{Surv(time_to_dropout,
+#'   dropout) ~ trt}.
+#' @param data Long-format data frame with one row per observation; the
+#'   event data are extracted from \code{event_data} if supplied, otherwise
+#'   from per-subject columns in \code{data}.
+#' @param event_data Optional data frame with one row per subject containing
+#'   the subject id and the variables on the right-hand side of
+#'   \code{surv_formula}.
+#' @param time_var Name of the longitudinal time column.
+#' @param subject_var Name of the subject identifier column.
+#' @param event_time_var Name of the column holding time-to-event (defaults to
+#'   the column name used by the shipped data sets).
+#' @param event_var Name of the event indicator column (1 = event).
+#' @param association One of "current_value", "slope", "both".
+#' @param surv_model Baseline hazard family: \code{"weibull"} or
+#'   \code{"exponential"}. The legacy value \code{"stan_jm"} is accepted for
+#'   backward compatibility but currently warns and falls back to
+#'   \code{"weibull"}.
+#' @param ... Additional arguments passed to the fitting engine.
+#' @return Object of class \code{"pmrm_joint"} with elements \code{long_fit},
+#'   \code{surv_fit}, \code{association}, and helper summaries.
+#' @references Rizopoulos D (2012). Joint Models for Longitudinal and
+#'   Time-to-Event Data: With Applications in R. Chapman and Hall/CRC
+#'   Biostatistics Series. ISBN 978-1-4398-7286-4.
+#' @examples
+#' fit <- pmrm_joint(updrs ~ time * trt,
+#'                   Surv(time_to_dropout, dropout) ~ trt,
+#'                   data = parkinsons_simulated,
+#'                   association = "current_value")
+#' class(fit)
+#' fit$assoc_terms
+#' @export
+pmrm_joint <- function(long_formula,
+                       surv_formula,
+                       data,
+                       event_data = NULL,
+                       time_var = "time",
+                       subject_var = "id",
+                       event_time_var = "time_to_dropout",
+                       event_var = "dropout",
+                       association = c("current_value", "slope", "both"),
+                       surv_model = c("weibull", "exponential", "stan_jm"),
+                       ...) {
+  association <- match.arg(association)
+  surv_model <- match.arg(surv_model)
+
+  if (surv_model == "stan_jm") {
+    warning("Bayesian joint modelling ('surv_model = \"stan_jm\"') is not ",
+            "implemented; falling back to a Weibull survival submodel.")
+    surv_model <- "weibull"
+  }
+
+  data <- as.data.frame(data)
+
+  # ---- stage 1: longitudinal submodel ----
+  long_fit <- pmrm_nlme(long_formula, data = data,
+                        time_var = time_var, subject_var = subject_var, ...)
+
+  eb <- nlme::random.effects(long_fit)
+  fe <- stats::coef(summary(long_fit))[, 1]
+  subj_ids <- rownames(eb)
+
+  # EB current value at each subject's event/censoring time
+  ev <- if (!is.null(event_data)) as.data.frame(event_data) else {
+    uq <- !duplicated(data[[subject_var]])
+    keep <- c(subject_var, event_time_var, event_var,
+              all.vars(surv_formula[[3]]))
+    keep <- unique(intersect(keep, names(data)))
+    data[uq, keep, drop = FALSE]
+  }
+  names(ev)[names(ev) == subject_var] <- "id"
+  names(ev)[names(ev) == event_time_var] <- "time_to_event"
+  names(ev)[names(ev) == event_var] <- "dropout"
+  if (!all(c("id", "time_to_event", "dropout") %in% names(ev))) {
+    stop("Could not locate the subject / event-time / event columns in the ",
+         "data. Supply 'event_data', or set 'subject_var', ",
+         "'event_time_var' and 'event_var' to match your column names.")
+  }
+
+  m <- match(as.character(ev$id), subj_ids)
+  # The longitudinal submodel may fall back to a random intercept only, in
+  # which case the empirical-Bayes random slope is zero.
+  ev$.b0 <- if ("(Intercept)" %in% colnames(eb)) eb[m, "(Intercept)"] else 0
+  ev$.b1 <- if ("time" %in% colnames(eb)) eb[m, "time"] else 0
+  fe_b0 <- if ("(Intercept)" %in% names(fe)) fe[["(Intercept)"]] else 0
+  fe_b1 <- if ("time" %in% names(fe)) fe[["time"]] else 0
+  ev$.y_current <- fe_b0 + ev$.b0 + (fe_b1 + ev$.b1) * ev$time_to_event
+
+  assoc_names <- switch(association,
+    "current_value" = ".y_current",
+    "slope"         = ".b1",
+    "both"          = c(".y_current", ".b1")
+  )
+
+  # ---- stage 2: survival submodel ----
+  rhs_txt <- surv_rhs_text(surv_formula)
+  f2 <- as.formula(paste("Surv(time_to_event, dropout) ~",
+                         rhs_txt, "+", paste(assoc_names, collapse = " + ")))
+  dist <- if (surv_model == "exponential") "exponential" else "weibull"
+  surv_fit <- survival::survreg(f2, data = ev, dist = dist)
+
+  structure(list(long_fit = long_fit,
+                 surv_fit = surv_fit,
+                 event_data = ev,
+                 association = association,
+                 assoc_terms = assoc_names),
+            class = c("pmrm_joint", "list"))
+}
+
+#' Summarize a joint model fit
+#'
+#' @param object A \code{pmrm_joint} object.
+#' @param ... Unused.
+#' @return A list with the progression fixed/random effects, the survival
+#'   coefficients, the association structure and its coefficients, and the
+#'   longitudinal/survival AIC values.
+#' @examples
+#' fit <- pmrm_joint(updrs ~ time * trt,
+#'                   Surv(time_to_dropout, dropout) ~ trt,
+#'                   data = parkinsons_simulated,
+#'                   association = "both")
+#' s <- summary(fit)
+#' s$survival
+#' s$association_coefficients
+#' @export
+summary.pmrm_joint <- function(object, ...) {
+  list(
+    progression = list(
+      fixed_effects = stats::coef(summary(object$long_fit))[, 1],
+      random_effects_sd = nlme::VarCorr(object$long_fit)
+    ),
+    survival = stats::coef(object$surv_fit),
+    association_structure = object$association,
+    association_coefficients = stats::coef(object$surv_fit)[object$assoc_terms],
+    AIC_longitudinal = tryCatch(stats::AIC(object$long_fit),
+                                error = function(e) NA_real_),
+    AIC_survival = tryCatch(stats::AIC(object$surv_fit),
+                            error = function(e) NA_real_)
+  )
+}
